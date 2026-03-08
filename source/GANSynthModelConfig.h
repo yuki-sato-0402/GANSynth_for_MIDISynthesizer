@@ -30,7 +30,7 @@ static anira::InferenceConfig GANSynth_model_config(
     1000.00f,   //  Maximum allowed inference time in milliseconds per inference
     2,        // Number of warm-up inferences to perform during initialization
     false,    // Whether to use exclusive processor sessions
-    0.0f     // Ratio controlling blocking behavior (0.0-1.0)
+    1.0f     // Ratio controlling blocking behavior (0.0-1.0)
 );
 
 #endif //ANIRA_GANSynth_model_CONFIG_H

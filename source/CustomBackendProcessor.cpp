@@ -16,7 +16,6 @@ CustomBackend::~CustomBackend() {
 }
 
 void CustomBackend::prepare() {
-    std::cout << "$[CustomBackend] Preparing instance for inference...$" << std::endl;
     for(auto& instance : m_instances) {
         instance->prepare();
     }
@@ -73,13 +72,10 @@ CustomBackend::Instance::Instance(InferenceConfig& inference_config) : m_memory_
         m_output_names[i] = m_output_name[i].get();
     }
 
-    // Allocate persistent memory for input tensors
-    m_input_data.resize(m_inference_config.get_tensor_input_shape().size());
-
+    
     m_inputs.clear();
     // The first input is of type int32.
     m_note_number_data.resize(m_inference_config.get_tensor_input_size()[0]);
-
     //std::cout << "m_inference_config.get_tensor_input_size()[0]: " << m_inference_config.get_tensor_input_size()[0] << std::endl;
     //std::cout << "m_inference_config.get_tensor_input_size()[1]: " << m_inference_config.get_tensor_input_size()[1] << std::endl;
     m_inputs.emplace_back(Ort::Value::CreateTensor<int32_t>(
@@ -91,6 +87,7 @@ CustomBackend::Instance::Instance(InferenceConfig& inference_config) : m_memory_
     ));
 
     // The second input is of type float.
+    m_input_data.resize(m_inference_config.get_tensor_input_shape().size());
     m_input_data[0].resize(m_inference_config.get_tensor_input_size()[1]);
     m_inputs.emplace_back(Ort::Value::CreateTensor<float>(
         m_memory_info,
@@ -116,23 +113,21 @@ CustomBackend::Instance::~Instance() {
 }
     
 void CustomBackend::Instance::prepare() {
-    std::cout << "$[CustomBackend] Preparing instance for inference...$" << std::endl;
     for (auto & i : m_input_data) {
         i.clear();
     }
     for (auto & i : m_note_number_data) {
         i = 0;
     }
-
     std::cout << "$[CustomBackend] Instance prepared successfully!$" << std::endl;
-
-    
 }
 
 void CustomBackend::Instance::process(std::vector<BufferF>& input, std::vector<BufferF>& output, std::shared_ptr<SessionElement> session) {
     (void)session;  
+    std::cout << "$[CustomBackend] Processing inference...$" << std::endl;
 
     // Input 0: int32 type (Note Number [1])
+    // Assuming input[0] contains the MIDI note number as a float, we need to convert it to int32
     m_note_number_data[0] =  static_cast<int32_t>(input[0].data()[0]);
     m_inputs[0] = Ort::Value::CreateTensor<int32_t>(
         m_memory_info,

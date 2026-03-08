@@ -102,7 +102,6 @@ void GANSynth_for_MIDISynthesizer_Processor::prepareToPlay (double sampleRate, i
         static_cast<float>(sampleRate),
     };
 
-    //inference_handler.set_non_realtime(true);
     std::cout << "$Preparing GANSynth for MIDI Synthesizer...$" << std::endl;
     inference_handler.prepare(host_config);
     inference_handler.set_inference_backend(anira::InferenceBackend::CUSTOM);
@@ -118,9 +117,6 @@ void GANSynth_for_MIDISynthesizer_Processor::prepareToPlay (double sampleRate, i
 
     midiMessageCollector.reset(sampleRate);
 
-    std::cout << "$Using Custom GANSynth backend for inference.$" << std::endl;
-    //inference_handler.set_inference_backend(anira::InferenceBackend::CUSTOM);
-    // In prepareToPlay(), after prepare():
     std::cout << "[DEBUG] Active inferences: " << inference_handler.get_available_samples(0) << std::endl;
 }
 
@@ -197,16 +193,13 @@ void GANSynth_for_MIDISynthesizer_Processor::triggerInference(int midiNote)
     {
         std::cout << "Starting GANSynth inference for MIDI note: " << midiNote << std::endl;
         
-        // 1. Prepare Inputs
-         
+        // Prepare Inputs
         // Tensor 0: Note [1]
-        // Note: matches GANSynthModelConfig.h m_tensor_input_size[0]
         std::vector<float> input0Data(1, static_cast<float>(midiNote));
         const float* input0Ptr = input0Data.data();
         const float* input0ChannelPtrs[] = { input0Ptr };
 
         // Tensor 1: Latent Noise [256]
-        // Note: matches GANSynthModelConfig.h m_tensor_input_size[1]
         std::vector<float> input1Data(256);
         juce::Random rand;
         for (int i = 0; i < 256; ++i) {
@@ -235,11 +228,7 @@ void GANSynth_for_MIDISynthesizer_Processor::triggerInference(int midiNote)
         //auto timeout = std::chrono::steady_clock::now() + std::chrono::seconds(10); 
         //size_t popped = inference_handler.pop_data(output0ChannelPtrs, allOutputSizes[0], timeout, 0);    
 
-
-        //std::cout << "$[PluginProcessor] Input size: " << allInputSizes[0] << ", " << allInputSizes[1] << "$" << std::endl;
         // 3. Inference
-        //size_t tensor_index is an index used to specify a particular tensor among multiple tensors (inputs and outputs). In this case, since we have only one output tensor, we can set it to 0.
-        //size_t tensor_index = 0;
         inference_handler.process(allInputPtrs, allInputSizes, allOutputPtrs, allOutputSizes);
        
         // 4. iSTFT Post-processing
