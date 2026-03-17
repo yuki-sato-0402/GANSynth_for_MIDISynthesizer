@@ -11,7 +11,7 @@ def mel_to_hertz(mel_values):
     return 700.0 * (np.exp(mel_values / 1127.0) - 1.0)
 
 def linear_to_mel_weight_matrix(num_mel_bins, num_spectrogram_bins, sample_rate):
-    """spectral_ops.py のロジックを忠実に再現"""
+    """Faithfully reproduce the logic of spectral_ops.py"""
     nyquist_hertz = sample_rate / 2.0
     #Exclude DC bin (GANSynth/HTK default)
     bands_to_zero = 1
@@ -26,6 +26,7 @@ def linear_to_mel_weight_matrix(num_mel_bins, num_spectrogram_bins, sample_rate)
     # Ensuring minimum bandwidth
     freq_res = nyquist_hertz / float(num_spectrogram_bins)
     freq_th = 1.5 * freq_res
+    print(f"Minimum frequency threshold for mel bands: {freq_th} Hz")
     for i in range(num_mel_bins):
         center_hz = mel_to_hertz(center_mel[i])
         lower_hz = mel_to_hertz(lower_edge_mel[i])
@@ -56,7 +57,7 @@ def get_mel_to_linear_matrix(n_mel, n_mag, sr):
     d = np.array([1.0 / x if np.abs(x) > 1.0e-8 else 0.0 for x in np.sum(p, axis=0)])
     return np.matmul(m_t, np.diag(d))
 
-def gansynth_onnx_inference(model_path, midi_note, output_wav):
+def gansynth_onnx_inference(model_path, midi_note, latent_vector, output_wav):
     print(f"Loading model from {model_path}...")
     sess = ort.InferenceSession(model_path)
     
@@ -64,9 +65,7 @@ def gansynth_onnx_inference(model_path, midi_note, output_wav):
     #For the NSynth dataset, MIDI 24 (C1) corresponds to index 0, and MIDI 60 (C4) corresponds to index `36`.
     MIN_MIDI_PITCH = 24
     label = midi_note - MIN_MIDI_PITCH
-    
     label_input = np.array([label], dtype=np.int32)
-    latent_vector = np.random.normal(size=(1, 256)).astype(np.float32)
     
     print(f"Generating MIDI {midi_note} (Internal Label: {label})...")
     outputs = sess.run(None, {'Placeholder:0': label_input, 'Placeholder_1:0': latent_vector})
@@ -75,6 +74,10 @@ def gansynth_onnx_inference(model_path, midi_note, output_wav):
     specgram = outputs[0][0]
     logmelmag2 = specgram[:, :, 0]
     mel_ifreq = specgram[:, :, 1]
+    
+    print("Output shapes:")
+    print("Log-Mel Magnitude shape:", logmelmag2.shape)
+    print("Mel IFreq shape:", mel_ifreq.shape)  
     
     # Constants
     SR = 16000
@@ -85,6 +88,12 @@ def gansynth_onnx_inference(model_path, midi_note, output_wav):
     
     # Preparation of the inverse transformation matrix (approximate inverse linear transformation matrix)
     mel2l = get_mel_to_linear_matrix(N_MEL, N_MAG, SR)
+    
+    # Export the mel2l matrix as a csv file for debugging
+    np.savetxt('pythonScripts/mel2l_matrix.csv', mel2l, fmt='%.6f', delimiter=',')
+    
+    #print("mel2l shape:", mel2l.shape)  
+    #print(mel2l[:5, :5])  # Print the top-left 5x5 block of the matrix for verification
     
     # 1. Magnitude Conversion: Mel LogPower -> Linear Magnitude
     mag2_linear = np.dot(np.exp(logmelmag2), mel2l)
@@ -97,18 +106,31 @@ def gansynth_onnx_inference(model_path, midi_note, output_wav):
     # 3. ISTFT
     print("Performing ISTFT...")
     stft = mag_linear * np.exp(1j * linear_phase)
+    print("STFT shape:", stft.shape)
     audio = librosa.istft(stft.T, hop_length=HOP_LENGTH, win_length=N_FFT)
     
     # 4. Save
+    # Normalize audio to prevent clipping
     audio = audio / (np.max(np.abs(audio)) + 1e-8)
+    print("audio shape:", audio.shape)
     sf.write(output_wav, audio, SR)
     print(f"Success! Saved to {output_wav}")
 
 if __name__ == "__main__":
     model_path = 'model/gansynth.onnx'
-    output_wav = 'pythonScripts/outputAudio/output_gansynth.wav'
-    midi_note = 60  # C4
+    latent_vector = np.random.normal(size=(1, 256)).astype(np.float32)
+    
+    #for midi_note in [60, 64, 67]:  # C4, E4, G4
+    #    output_wav = f'pythonScripts/outputAudio/output_gansynth_{midi_note}.wav'
+    #    if os.path.exists(model_path):
+    #        gansynth_onnx_inference(model_path, midi_note, latent_vector, output_wav)
+    #    else:
+    #        print(f"File not found: {model_path}")
+    
+    # Example for MIDI 60 (C4)
+    midi_note = 60
+    output_wav = f'pythonScripts/outputAudio/output_gansynth_{midi_note}.wav'
     if os.path.exists(model_path):
-        gansynth_onnx_inference(model_path, midi_note, output_wav)
+        gansynth_onnx_inference(model_path, midi_note, latent_vector, output_wav)
     else:
         print(f"File not found: {model_path}")

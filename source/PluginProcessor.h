@@ -2,8 +2,7 @@
 
 #include <JuceHeader.h>
 #include <anira/anira.h>
-#include "GANSynthModelConfig.h"
-#include "CustomBackendProcessor.h"
+#include "GANSynthInference.h"
 //==============================================================================
 class GANSynth_for_MIDISynthesizer_Processor  : public juce::AudioProcessor, public juce::AudioProcessorValueTreeState::Listener, 
 public juce::ValueTree::Listener, public juce::ActionBroadcaster
@@ -45,40 +44,29 @@ public:
     void getStateInformation (juce::MemoryBlock& destData) override;
     void setStateInformation (const void* data, int sizeInBytes) override;
 
-    //juce::AudioProcessorValueTreeState& getValueTreeState() { return apvts; }
 
     juce::MidiMessageCollector& getMidiMessageCollector() noexcept { return midiMessageCollector; }
 
-    void triggerInference(int midiNote);
     bool isGenerating() const { return m_isGenerating; }
 
+    void generateAudio();
+
 private:
+    float nextGaussian(juce::Random& r);
+
     void parameterChanged (const juce::String& parameterID, float newValue) override;
-
-  
-    juce::AudioProcessorValueTreeState apvts;
-    juce::ValueTree valueTree;
-
-    juce::dsp::Gain<float> gain;
-    float gainParam;
-
-    // Optional ContextConfig
-    //anira::ContextConfig anira_context_config;
-
-    anira::InferenceConfig inference_config = GANSynth_model_config;
-    anira::PrePostProcessor pp_processor;
-    anira::CustomBackend custom_backend;
-    anira::InferenceHandler inference_handler;
-
     // Offline inference and playback
+    GANSynthInference m_inference;
     juce::AudioSampleBuffer m_generatedAudio;
     std::atomic<bool> m_isGenerating {false};
     std::atomic<int> m_playIndex {0};
     std::atomic<bool> m_isPlaying {false};
     int m_lastMidiNote = 60;
+  
+    juce::AudioProcessorValueTreeState apvts;
 
-    double mutedSamples = 0;
-    int64_t totalSamplesProcessed = 0;
+    juce::dsp::Gain<float> gain;
+    float gainParam;
 
     juce::MidiMessageCollector midiMessageCollector;
     

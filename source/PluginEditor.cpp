@@ -23,7 +23,7 @@ GANSynth_for_MIDISynthesizer_ProcessorEditor::GANSynth_for_MIDISynthesizer_Proce
 
   addAndMakeVisible(generateButton);
   generateButton.onClick = [this] {
-    processorRef.triggerInference(60); // Default to C4 for now
+    processorRef.generateAudio();
   };
 
   addAndMakeVisible(midiKeyboardComponent);

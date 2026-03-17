@@ -14,12 +14,8 @@ GANSynth_for_MIDISynthesizer_Processor::GANSynth_for_MIDISynthesizer_Processor()
         std::make_unique<juce::AudioParameterFloat>(juce::ParameterID { "outputGain",  1}, "OutputGain",
         juce::NormalisableRange<float>(0.f, 1.f, 0.01f), 0.5f), 
         }
-        ),
-        pp_processor(inference_config), 
-        custom_backend (inference_config),  
-        inference_handler(pp_processor, inference_config, custom_backend)
+        )
 {
-
     apvts.addParameterListener("outputGain", this);
     gainParam = *apvts.getRawParameterValue("outputGain");
 }
@@ -91,33 +87,49 @@ void GANSynth_for_MIDISynthesizer_Processor::changeProgramName (int index, const
 //==============================================================================
 void GANSynth_for_MIDISynthesizer_Processor::prepareToPlay (double sampleRate, int samplesPerBlock)
 {
-    mutedSamples = sampleRate * 2;
-    totalSamplesProcessed = 0;
     juce::dsp::ProcessSpec spec {sampleRate,
                                  static_cast<juce::uint32>(samplesPerBlock),
                                  static_cast<juce::uint32>(getTotalNumInputChannels())};
 
-    anira::HostConfig host_config {
-        static_cast<float>(samplesPerBlock),
-        static_cast<float>(sampleRate),
-    };
-
-    std::cout << "$Preparing GANSynth for MIDI Synthesizer...$" << std::endl;
-    inference_handler.prepare(host_config);
-    inference_handler.set_inference_backend(anira::InferenceBackend::CUSTOM);
-    inference_handler.set_non_realtime(true);
-    
-    std::cout << "$Inference latency (in samples): " << inference_handler.get_latency() << "$" << std::endl;
-    int new_latency = (int) inference_handler.get_latency();
-
     gain.prepare(spec);
     gain.setGainLinear(gainParam);
 
-    setLatencySamples(new_latency);
-
+    
     midiMessageCollector.reset(sampleRate);
+    
+    m_inference.setTargetSampleRate(sampleRate);
+    m_inference.prepare(GANSynth_MODEL_DIR "gansynth.onnx");
+    m_inference.loadMel2lFromCsv(GANSynth_MODEL_DIR "mel2l_matrix.csv");
+}
 
-    std::cout << "[DEBUG] Active inferences: " << inference_handler.get_available_samples(0) << std::endl;
+float GANSynth_for_MIDISynthesizer_Processor::nextGaussian(juce::Random& r) {
+    // Box-Muller transform
+    float u1 = r.nextFloat();
+    float u2 = r.nextFloat();
+    return std::sqrt(-2.0f * std::log(u1)) * std::cos(2.0f * juce::MathConstants<float>::pi * u2);
+}
+
+void GANSynth_for_MIDISynthesizer_Processor::generateAudio()
+{
+    if (m_isGenerating) return;
+
+    juce::Thread::launch([this]() {
+        m_isGenerating = true;
+        
+        std::vector<float> latent(256);
+        juce::Random r;
+        for (auto& val : latent)
+            val = nextGaussian(r);
+        
+        m_inference.generate(m_lastMidiNote, latent, m_generatedAudio);
+
+        std::cout << "Generated audio with " << m_generatedAudio.getNumSamples() << " samples." << std::endl;
+        
+        m_isGenerating = false;
+        
+        // Notify listeners that generation is complete
+        sendActionMessage("GenerationFinished");
+    });
 }
 
 void GANSynth_for_MIDISynthesizer_Processor::releaseResources()
@@ -135,8 +147,7 @@ bool GANSynth_for_MIDISynthesizer_Processor::isBusesLayoutSupported (const Buses
         return true;
 }
 
-void GANSynth_for_MIDISynthesizer_Processor::processBlock (juce::AudioBuffer<float>& buffer,
-                                              juce::MidiBuffer& midiMessages)
+void GANSynth_for_MIDISynthesizer_Processor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midiMessages)
 {
     juce::ScopedNoDenormals noDenormals;
 
@@ -148,30 +159,46 @@ void GANSynth_for_MIDISynthesizer_Processor::processBlock (juce::AudioBuffer<flo
 
         if (msg.isNoteOn())
         {
-            m_lastMidiNote = msg.getNoteNumber();
             m_playIndex = 0;
             m_isPlaying = true;
         }
     }
 
     buffer.clear();
-
     if (m_isPlaying && m_generatedAudio.getNumSamples() > 0)
     {
         int numSamples = buffer.getNumSamples();
         int generatedSamples = m_generatedAudio.getNumSamples();
         int playIdx = m_playIndex.load();
+        const int fadeOutSamples = static_cast<int>(getSampleRate() * 0.02);
+        int fadeStartPos = generatedSamples - fadeOutSamples;
 
-        if (playIdx < generatedSamples)
-        {
+        if (playIdx < generatedSamples){
             int samplesToCopy = std::min(numSamples, generatedSamples - playIdx);
+
             for (int channel = 0; channel < buffer.getNumChannels(); ++channel)
             {
-                buffer.copyFrom(channel, 0, m_generatedAudio, 0, playIdx, samplesToCopy);
+                auto* dest = buffer.getWritePointer(channel);
+                auto* src  = m_generatedAudio.getReadPointer(0);
+
+                for (int i = 0; i < samplesToCopy; ++i)
+                {
+                    int globalSample = playIdx + i;
+
+                    float fade_gain = 1.0f;
+
+                    if (globalSample >= fadeStartPos)
+                    {
+                        float fadePos = (float)(globalSample - fadeStartPos) / fadeOutSamples;
+                        fade_gain = 1.0f - fadePos;
+                    }
+
+                    dest[i] = src[globalSample] * fade_gain;
+                }
             }
+
             m_playIndex += samplesToCopy;
-        }
-        else
+        }else
         {
             m_isPlaying = false;
         }
@@ -179,106 +206,8 @@ void GANSynth_for_MIDISynthesizer_Processor::processBlock (juce::AudioBuffer<flo
 
     juce::dsp::AudioBlock<float> audioBlock(buffer);
     gain.process(juce::dsp::ProcessContextReplacing<float>(audioBlock));
-
-    totalSamplesProcessed += buffer.getNumSamples();
 }
 
-void GANSynth_for_MIDISynthesizer_Processor::triggerInference(int midiNote)
-{
-    if (m_isGenerating) return;
-
-    m_isGenerating = true;
-
-    juce::Thread::launch([this, midiNote]()
-    {
-        std::cout << "Starting GANSynth inference for MIDI note: " << midiNote << std::endl;
-        
-        // Prepare Inputs
-        // Tensor 0: Note [1]
-        std::vector<float> input0Data(1, static_cast<float>(midiNote));
-        const float* input0Ptr = input0Data.data();
-        const float* input0ChannelPtrs[] = { input0Ptr };
-
-        // Tensor 1: Latent Noise [256]
-        std::vector<float> input1Data(256);
-        juce::Random rand;
-        for (int i = 0; i < 256; ++i) {
-            input1Data[i] = rand.nextFloat() * 2.0f - 1.0f;
-        }
-        const float* input1Ptr = input1Data.data();
-        const float* input1ChannelPtrs[] = { input1Ptr };
-
-        // Bundle inputs (each tensor -> array of channel pointers)
-        const float* const* allInputPtrs[] = { input0ChannelPtrs, input1ChannelPtrs };
-        size_t allInputSizes[] = { (size_t)input0Data.size(), (size_t)input1Data.size() };
-        std::cout << "(size_t)input0Data.size(): " << (size_t)input0Data.size() << ", (size_t)input1Data.size(): " << (size_t)input1Data.size() << std::endl;
-        
-         // Push the input data to the custom backend processor
-        //inference_handler.push_data(allInputPtrs, allInputSizes);  
-     
-        // Prepare Output Buffer
-        const int triggerSize = 128 * 1024 * 2; // matches GANSynthModelConfig.h m_tensor_output_size[0]
-        std::vector<float> outputRaw(triggerSize, 0.0f);
-        float* output0Ptr = outputRaw.data();
-        float* output0ChannelPtrs[] = { output0Ptr };
-        float* const* allOutputPtrs[] = { output0ChannelPtrs };
-        size_t allOutputSizes[] = { (size_t)triggerSize };
-
-        // Populate the output buffer with inference results
-        //auto timeout = std::chrono::steady_clock::now() + std::chrono::seconds(10); 
-        //size_t popped = inference_handler.pop_data(output0ChannelPtrs, allOutputSizes[0], timeout, 0);    
-
-        // 3. Inference
-        inference_handler.process(allInputPtrs, allInputSizes, allOutputPtrs, allOutputSizes);
-       
-        // 4. iSTFT Post-processing
-        const int numFrames = 128;
-        const int numMelBins = 1024;
-        const int fftSize = 2048;
-        const int hopSize = 512;
-        const int numMagBins = fftSize / 2 + 1;
-        const int totalSamples = numFrames * hopSize + fftSize;
-
-        m_generatedAudio.setSize(1, totalSamples);
-        m_generatedAudio.clear();
-        float* audioPtr = m_generatedAudio.getWritePointer(0);
-
-        juce::dsp::FFT fft(11);
-        std::vector<float> window(fftSize);
-        for (int i = 0; i < fftSize; ++i) window[i] = 0.5f * (1.0f - std::cos(2.0f * M_PI * i / (fftSize - 1)));
-        
-        std::vector<std::complex<float>> freqData(fftSize);
-        std::vector<float> phase(numMelBins, 0.0f);
-
-        for (int f = 0; f < numFrames; ++f) {
-            const float* frameData = outputRaw.data() + (f * numMelBins * 2);
-            std::fill(freqData.begin(), freqData.end(), std::complex<float>(0, 0));
-            
-            for (int m = 0; m < numMelBins; ++m) {
-                float logMelMag = frameData[m * 2];
-                float melIFreq = frameData[m * 2 + 1];
-                phase[m] += melIFreq * M_PI;
-                float mag = std::exp(logMelMag);
-                int linearBin = (int)((float)m / numMelBins * numMagBins);
-                if (linearBin < numMagBins) freqData[linearBin] += std::polar(mag, phase[m]);
-            }
-
-            fft.perform(freqData.data(), (juce::dsp::Complex<float>*)freqData.data(), true);
-            
-            int offset = f * hopSize;
-            for (int i = 0; i < fftSize; ++i) {
-                if (offset + i < totalSamples) audioPtr[offset + i] += freqData[i].real() * window[i];
-            }
-        }
-
-        // Normalization
-        float maxMag = m_generatedAudio.getMagnitude(0, 0, totalSamples);
-        m_generatedAudio.applyGain(1.0f / (maxMag + 1e-8f));
-
-        std::cout << "Inference and Reconstruction completed." << std::endl;
-        m_isGenerating = false;
-    });
-}
 
 //==============================================================================
 bool GANSynth_for_MIDISynthesizer_Processor::hasEditor() const
