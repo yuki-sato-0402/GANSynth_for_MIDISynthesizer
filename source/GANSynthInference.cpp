@@ -127,8 +127,6 @@ void GANSynthInference::generate(int midiNote, const std::vector<float>& latentV
     } catch (const Ort::Exception& e) {
         std::cerr << "ONNX Runtime Exception: " << e.what() << std::endl;
     }
-
-    std::cout << "Audio generation completed." << std::endl;
 }
 
 //static float hertz_to_mel(float hz)  { return 1127.0f * std::log(1.0f + hz / 700.0f); }

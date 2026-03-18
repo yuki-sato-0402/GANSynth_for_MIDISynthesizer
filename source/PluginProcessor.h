@@ -51,7 +51,14 @@ public:
 
     void generateAudio();
 
-    const juce::AudioSampleBuffer& getGeneratedAudio() const { return m_generatedAudio; }
+    const juce::AudioSampleBuffer& getGeneratedAudio() const { 
+        // If no notes have been generated, return an empty buffer to avoid issues in the editor
+        if (m_generatedNotes.empty()) return m_emptyBuffer;
+        // Find the closest generated note to the last MIDI note played
+        auto it = m_generatedNotes.find(m_lastMidiNote);
+        if (it != m_generatedNotes.end()) return it->second;
+        return m_generatedNotes.begin()->second;
+    }
 
 private:
     float nextGaussian(juce::Random& r);
@@ -59,13 +66,21 @@ private:
     void parameterChanged (const juce::String& parameterID, float newValue) override;
     // Offline inference and playback
     GANSynthInference m_inference;
-    juce::AudioSampleBuffer m_generatedAudio;
+    // Cache for generated audio samples for MIDI notes
+    std::map<int, juce::AudioSampleBuffer> m_generatedNotes;
+    juce::AudioSampleBuffer m_emptyBuffer;
+
     std::atomic<bool> m_isGenerating {false};
     std::atomic<int> m_playIndex {0};
     std::atomic<bool> m_isPlaying {false};
     int m_lastMidiNote = 60;
-  
+
+    int m_currentBaseNote = 60;
+    double m_pitchRatio = 1.0;
+    juce::LagrangeInterpolator m_interpolator;
+
     juce::AudioProcessorValueTreeState apvts;
+
 
     juce::dsp::Gain<float> gain;
     float gainParam;

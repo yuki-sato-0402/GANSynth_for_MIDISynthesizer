@@ -39,6 +39,7 @@ GANSynth_for_MIDISynthesizer_ProcessorEditor::GANSynth_for_MIDISynthesizer_Proce
 
   addAndMakeVisible(midiKeyboardComponent);
   midiKeyboardState.addListener(&processorRef.getMidiMessageCollector());
+  midiKeyboardComponent.setAvailableRange (24, 84);
 
   addAndMakeVisible(waveformComponent);
 

@@ -2,6 +2,8 @@
 #include "PluginEditor.h"
 #include <cmath>
 #include <complex>
+#include <map>
+#include <algorithm>
 
 //==============================================================================
 GANSynth_for_MIDISynthesizer_Processor::GANSynth_for_MIDISynthesizer_Processor() 
@@ -115,18 +117,25 @@ void GANSynth_for_MIDISynthesizer_Processor::generateAudio()
 
     juce::Thread::launch([this]() {
         m_isGenerating = true;
-        
+
+        m_generatedNotes.clear();
+
         std::vector<float> latent(256);
         juce::Random r;
         for (auto& val : latent)
             val = nextGaussian(r);
-        
-        m_inference.generate(m_lastMidiNote, latent, m_generatedAudio);
+        // Generate every 6 semitones from 21 to 108
+        for (int note = 24; note <= 84; note += 6)
+        {
+            juce::AudioSampleBuffer tempBuffer;
+            m_inference.generate(note, latent, tempBuffer);
 
-        std::cout << "Generated audio with " << m_generatedAudio.getNumSamples() << " samples." << std::endl;
-        
+            // Cache the generated audio for this note
+            m_generatedNotes[note].makeCopyOf(tempBuffer);
+        }
+
         m_isGenerating = false;
-        
+
         // Notify listeners that generation is complete
         sendActionMessage("GenerationFinished");
     });
@@ -159,46 +168,85 @@ void GANSynth_for_MIDISynthesizer_Processor::processBlock (juce::AudioBuffer<flo
 
         if (msg.isNoteOn())
         {
-            m_playIndex = 0;
-            m_isPlaying = true;
+            int midiNote = msg.getNoteNumber();
+              
+            //Select the closest pre-generated note and adjust the playback speed to account for the pitch difference
+            if (!m_generatedNotes.empty())
+            {
+               /*
+               Find the first element greater than or equal to midiNote
+               Generated: 60, 64, 67
+               Input: 62
+               → "it" refers to 64
+               */
+                auto it = m_generatedNotes.lower_bound(midiNote);
+                int closestNote = 60;
+                
+                // If all elements are greater than midiNote
+                if (it == m_generatedNotes.end()) {
+                    closestNote = m_generatedNotes.rbegin()->first;
+                // If all elements are less than midiNote
+                } else if (it == m_generatedNotes.begin()) {
+                    closestNote = it->first;
+                // Otherwise, find the closest note
+                } else {
+                    auto prev = std::prev(it);
+                    // Compare distances to find the closest note
+                    if (midiNote - prev->first < it->first - midiNote)
+                        closestNote = prev->first;
+                    else
+                        closestNote = it->first;
+                }
+                // Set the current base note and calculate the pitch ratio for playback
+                m_currentBaseNote = closestNote;
+                m_pitchRatio = std::pow(2.0, (double)(midiNote - m_currentBaseNote) / 12.0);
+                
+                m_interpolator.reset();
+                m_playIndex = 0;
+                m_isPlaying = true;
+            }
         }
     }
 
     buffer.clear();
-    if (m_isPlaying && m_generatedAudio.getNumSamples() > 0)
+    if (m_isPlaying && !m_generatedNotes.empty())
     {
+        auto& srcBuffer = m_generatedNotes[m_currentBaseNote];
         int numSamples = buffer.getNumSamples();
-        int generatedSamples = m_generatedAudio.getNumSamples();
+        int generatedSamples = srcBuffer.getNumSamples();
         int playIdx = m_playIndex.load();
-        const int fadeOutSamples = static_cast<int>(getSampleRate() * 0.02);
-        int fadeStartPos = generatedSamples - fadeOutSamples;
 
-        if (playIdx < generatedSamples){
-            int samplesToCopy = std::min(numSamples, generatedSamples - playIdx);
-
-            for (int channel = 0; channel < buffer.getNumChannels(); ++channel)
+        if (playIdx < generatedSamples)
+        {
+            auto* src = srcBuffer.getReadPointer(0);
+            auto* dest = buffer.getWritePointer(0);
+            
+            int used = m_interpolator.process(m_pitchRatio, src + playIdx, dest, numSamples, generatedSamples - playIdx, 0);
+            
+            // Fade out at the end of the source buffer
+            const int fadeOutSamples = static_cast<int>(getSampleRate() * 0.05);
+            int fadeStartPos = generatedSamples - fadeOutSamples;
+            
+            if (playIdx + used >= fadeStartPos)
             {
-                auto* dest = buffer.getWritePointer(channel);
-                auto* src  = m_generatedAudio.getReadPointer(0);
-
-                for (int i = 0; i < samplesToCopy; ++i)
+                for (int i = 0; i < numSamples; ++i)
                 {
-                    int globalSample = playIdx + i;
-
-                    float fade_gain = 1.0f;
-
-                    if (globalSample >= fadeStartPos)
+                    // Approximation of current input position for fade
+                    double currentInputPos = playIdx + (i * m_pitchRatio);
+                    if (currentInputPos >= fadeStartPos)
                     {
-                        float fadePos = (float)(globalSample - fadeStartPos) / fadeOutSamples;
-                        fade_gain = 1.0f - fadePos;
+                        float fade_gain = 1.0f - (float)(currentInputPos - fadeStartPos) / fadeOutSamples;
+                        dest[i] *= std::max(0.0f, fade_gain);
                     }
-
-                    dest[i] = src[globalSample] * fade_gain;
                 }
             }
 
-            m_playIndex += samplesToCopy;
-        }else
+            m_playIndex += used;
+            
+            if (used == 0 && playIdx >= generatedSamples - 5) // Done
+                m_isPlaying = false;
+        }
+        else
         {
             m_isPlaying = false;
         }
