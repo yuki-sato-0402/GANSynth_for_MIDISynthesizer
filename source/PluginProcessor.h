@@ -51,6 +51,8 @@ public:
 
     void generateAudio();
 
+    const juce::AudioSampleBuffer& getGeneratedAudio() const { return m_generatedAudio; }
+
 private:
     float nextGaussian(juce::Random& r);
 

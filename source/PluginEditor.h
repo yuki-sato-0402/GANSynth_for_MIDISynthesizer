@@ -12,29 +12,39 @@
   ==============================================================================
 */
 
-class GANSynth_for_MIDISynthesizer_ProcessorEditor  : public juce::AudioProcessorEditor, public juce::Timer
+class GANSynth_for_MIDISynthesizer_ProcessorEditor  : public juce::AudioProcessorEditor, 
+                                            public juce::Timer,
+                                            public juce::ActionListener
 {
 public:
   GANSynth_for_MIDISynthesizer_ProcessorEditor(GANSynth_for_MIDISynthesizer_Processor& p, juce::AudioProcessorValueTreeState& apvts);
-  ~GANSynth_for_MIDISynthesizer_ProcessorEditor() override = default;
+  ~GANSynth_for_MIDISynthesizer_ProcessorEditor() override;
 
   //==============================================================================
   void paint (juce::Graphics& g) override;
   void resized() override; 
   void timerCallback() override { repaint(); }
+  void actionListenerCallback (const juce::String& message) override;
+
   typedef juce::AudioProcessorValueTreeState::SliderAttachment SliderAttachment;
   typedef juce::AudioProcessorValueTreeState::ComboBoxAttachment ComboBoxAttachment;
 
 private:
+  struct WaveformComponent : public juce::Component
+  {
+      void paint (juce::Graphics& g) override;
+      void setThumbnail (const juce::AudioSampleBuffer& buffer);
+      juce::AudioSampleBuffer waveformBuffer;
+  };
+
   GANSynth_for_MIDISynthesizer_Processor& processorRef;
   juce::AudioProcessorValueTreeState& valueTreeState;
 
   juce::Slider GainSlider;
-  
   juce::Label  GainLabel;
-  
   juce::TextButton generateButton { "Generate" };
 
+  WaveformComponent waveformComponent;
 
   std::unique_ptr<SliderAttachment> GainSliderAttachment;
  

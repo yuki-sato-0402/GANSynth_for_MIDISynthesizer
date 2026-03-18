@@ -29,18 +29,23 @@ In other words, the model's output itself only includes data in the spectral dom
 
 Additionally, the mel-to-linear transformation required for inverse FFT relies on a precomputed conversion matrix (computeMelToLinear). This matrix is ​​generated in Python and exported as a CSV file, which is then loaded and used within the JUCE implementation.
 
-I have prepared several Python scripts below.
+Several Python scripts are provided below.
 - [gansynthFreezeGraph](pythonScripts/gansynthFreezeGraph.py) : A script to convert TF pretrained checkpoints to a Freeze Graph.
 
 - [gansynth_onnxInference](pythonScripts/gansynth_onnxInference.py) : A script for inferring ONNX models in Python.
 
 - [modelConfig.py](pythonScripts/modelConfig.py) : A script to check the shapes of the input and output tensors to the model.
 
+## Acknowledgements
+This project utilizes parts of the build system and inference logic inspired by the following [anira](https://github.com/anira-project/anira) projects:
+
+* [anira/cmake/SetupOnnxRuntime.cmake](https://github.com/anira-project/anira/blob/main/cmake/SetupOnnxRuntime.cmake) - Used for automated ONNX Runtime installation and environment setup.
+* [minimal-onnxruntime.cpp](https://github.com/anira-project/anira/blob/main/examples/minimal-inference/onnxruntime/minimal-onnxruntime.cpp) - Referenced for the project structure and C++ inference implementation patterns.
+
+Special thanks to the authors for streamlining the complex process of integrating Neural Networks into JUCE applications.
 
 ## Other References
-- [minimal-onnxruntime.cpp](https://github.com/anira-project/anira/blob/main/examples/minimal-inference/onnxruntime/minimal-onnxruntime.cpp) : The inference for the ONNX model was created based on this program. 
-
-- [specgrams_helper_test.py](https://github.com/magenta/magenta/blob/main/magenta/models/gansynth/lib/specgrams_helper_test.py) : I used this as a reference when converting from the spectral domain to the time domain.
+- [specgrams_helper_test.py](https://github.com/magenta/magenta/blob/main/magenta/models/gansynth/lib/specgrams_helper_test.py) : Used this as a reference when converting from the spectral domain to the time domain.
 
 - [Tutorial: Build a MIDI synthesiser](https://juce.com/tutorials/tutorial_synth_using_midi_input/)
 
