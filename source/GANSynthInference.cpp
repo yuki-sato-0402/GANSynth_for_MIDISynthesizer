@@ -39,51 +39,57 @@ bool GANSynthInference::loadMel2lFromCsv(const juce::String& csvPath)
         return false;
     }
  
-    std::vector<float> data;
-    data.reserve(static_cast<size_t>(m_nMel * m_nMag));
+    m_sparseMel2l.assign(static_cast<size_t>(m_nMag), std::vector<SparseElement>());
  
     std::string line;
-    int rowCount = 0;
+    int melIndex = 0;
     while (std::getline(file, line)) {
         if (line.empty()) continue;
+        if (melIndex >= m_nMel) break;
+
         std::stringstream ss(line);
         std::string cell;
-        int colCount = 0;
+        int magIndex = 0;
+        // Instead of looping through all 1,024 channels, enable precise calculations for "only a few channels related to that frequency."
         while (std::getline(ss, cell, ',')) {
+            if (magIndex >= m_nMag) break;
             try {
-                data.push_back(std::stof(cell));
+                float val = std::stof(cell);
+                // Only store non-zero weights to save memory and computation
+                if (std::abs(val) > 1e-9f) {
+                    m_sparseMel2l[static_cast<size_t>(magIndex)].push_back({melIndex, val});
+                }
             } catch (...) {
-                std::cerr << "[GANSynth] Parse error at row=" << rowCount
-                          << " col=" << colCount << ": '" << cell << "'" << std::endl;
+                std::cerr << "[GANSynth] Parse error at mel=" << melIndex
+                          << " mag=" << magIndex << ": '" << cell << "'" << std::endl;
                 return false;
             }
-            ++colCount;
+            ++magIndex;
         }
-        ++rowCount;
+        ++melIndex;
     }
  
-    // Check if the loaded data matches the expected dimensions
-    const int expected = m_nMel * m_nMag; // 1024 * 1025 = 1,049,600
-    if ((int)data.size() != expected) {
-        std::cerr << "[GANSynth] mel2l CSV size mismatch: got " << data.size()
-                  << " values, expected " << expected
-                  << " (" << m_nMel << " rows x " << m_nMag << " cols)" << std::endl;
-        return false;
-    }
- 
-    m_mel2l = std::move(data);
     m_mel2lLoaded = true;
- 
-    std::cout << "[GANSynth] mel2l loaded from CSV: " << csvPath
-              << "  shape=[" << rowCount << ", " << m_nMag << "]" << std::endl;
- 
-    // Debug print the top-left 5x5 block of the matrix
-    std::cout << "[GANSynth] mel2l[:5,:5]:" << std::endl;
-    for (int j = 0; j < 5; ++j) {
-        for (int i = 0; i < 5; ++i)
-            std::cout << std::fixed << std::setprecision(3)<< m_mel2l[static_cast<size_t>(j * m_nMag + i)] << " ";
-        std::cout << std::endl;
+    
+    // Pre-calculate OLA normalization and window
+    const int total_samples = (m_numFrames - 1) * m_hopLength;
+    m_olaNormalization.assign(static_cast<size_t>(total_samples), 0.0f);
+    m_window.assign(static_cast<size_t>(m_nFFT), 0.0f);
+    juce::dsp::WindowingFunction<float>::fillWindowingTables(
+        m_window.data(), (size_t)m_nFFT, juce::dsp::WindowingFunction<float>::hann);
+
+    const int center_offset = m_nFFT / 2;
+    for (int t = 0; t < m_numFrames; ++t) {
+        int frame_start = t * m_hopLength - center_offset;
+        for (int i = 0; i < m_nFFT; ++i) {
+            int idx = frame_start + i;
+            if (idx >= 0 && idx < total_samples) {
+                m_olaNormalization[static_cast<size_t>(idx)] += m_window[static_cast<size_t>(i)] * m_window[static_cast<size_t>(i)];
+            }
+        }
     }
+ 
+    std::cout << "[GANSynth] mel2l loaded as sparse matrix from CSV: " << csvPath << std::endl;
  
     return true;
 }
@@ -246,102 +252,77 @@ void GANSynthInference::generate(int midiNote, const std::vector<float>& latentV
 // ─────────────────────────────────────────────────────────────────────────────
 void GANSynthInference::postProcess(const float* rawOutput, juce::AudioBuffer<float>& outputBuffer)
 {
-    // librosa istft output length with center=True:
-    //   (n_frames - 1) * hop_length + win_length
     const int total_samples = (m_numFrames - 1) * m_hopLength;
 
     juce::AudioSampleBuffer tempBuffer(1, total_samples);
     tempBuffer.clear();
     float* tmp_ptr = tempBuffer.getWritePointer(0);
 
-    // Linear-domain phase accumulator per bin [N_MAG]
-    // This is the cumsum of (linear_IF * π) across time frames
     std::vector<float> lin_phase_acc(static_cast<size_t>(m_nMag), 0.0f);
-
     std::vector<float> mel_power(static_cast<size_t>(m_nMel));
     std::vector<float> mel_IF(static_cast<size_t>(m_nMel));
 
-    // juce::dsp::FFT::perform needs buffers of size 2*N_FFT
-    std::vector<std::complex<float>> fft_in (static_cast<size_t>(m_nFFT * 2), {0.0f, 0.0f});
-    std::vector<std::complex<float>> fft_out(static_cast<size_t>(m_nFFT * 2), {0.0f, 0.0f});
+    std::vector<std::complex<float>> fft_in (static_cast<size_t>(m_nFFT), {0.0f, 0.0f});
+    std::vector<std::complex<float>> fft_out(static_cast<size_t>(m_nFFT), {0.0f, 0.0f});
 
-    std::vector<float> norm(static_cast<size_t>(total_samples), 0.0f);
-
-    // Hann synthesis window
-    std::vector<float> window(static_cast<size_t>(m_nFFT));
-    juce::dsp::WindowingFunction<float>::fillWindowingTables(
-        window.data(), (size_t)m_nFFT, juce::dsp::WindowingFunction<float>::hann);
-
-    // librosa center=True: frame t centered at t * hop_length
     const int center_offset = m_nFFT / 2;
 
     for (int t = 0; t < m_numFrames; ++t)
     {
-        // rawOutput layout: [T, N_MEL, 2] interleaved per mel bin
         const float* frame = rawOutput + (t * m_nMel * 2);
 
-        // ── Step 1: Read mel-domain values ───────────────────────────────────
         for (int j = 0; j < m_nMel; ++j) {
-            mel_power[static_cast<size_t>(j)] = std::exp(frame[static_cast<size_t>(j * 2 + 0)]);  // exp(logmelmag2) = mel power
-            mel_IF[static_cast<size_t>(j)]    = frame[static_cast<size_t>(j * 2 + 1)];            // mel instantaneous frequency
+            // Extract Mel power and IF for this frame
+            mel_power[static_cast<size_t>(j)] = std::exp(frame[static_cast<size_t>(j * 2 + 0)]);
+            mel_IF[static_cast<size_t>(j)]    = frame[static_cast<size_t>(j * 2 + 1)];
         }
 
-        // ── Step 2: Mel → Linear for power and IF ────────────────────────────
         std::fill(fft_in.begin(), fft_in.end(), std::complex<float>(0.0f, 0.0f));
 
         for (int i = 0; i < m_nMag; ++i) {
             float pow_lin = 0.0f;
             float if_lin  = 0.0f;
 
-            for (int j = 0; j < m_nMel; ++j) {
-                float w  = m_mel2l[static_cast<size_t>(j * m_nMag + i)];
-                pow_lin += mel_power[static_cast<size_t>(j)] * w;
-                if_lin  += mel_IF[static_cast<size_t>(j)]    * w;   // ← IF transformed to linear domain
+            // Sparse Mel -> Linear
+            for (const auto& el : m_sparseMel2l[static_cast<size_t>(i)]) {
+                // el.index : Contains only meaningful channel numbers in the range of 0 to 1023
+                pow_lin += mel_power[static_cast<size_t>(el.index)] * el.weight;
+                // el.weight : It contains non-zero weights
+                if_lin  += mel_IF[static_cast<size_t>(el.index)]    * el.weight;
             }
 
-            // Power → Magnitude
+            // Power to magnitude
             float mag_lin = std::sqrt(std::max(0.0f, pow_lin));
 
-            // ★ Accumulate phase in LINEAR domain (cumsum of linear_IF * π)
+            // Accumulate phase
             lin_phase_acc[static_cast<size_t>(i)] += if_lin * juce::MathConstants<float>::pi;
 
-            fft_in[static_cast<size_t>(i)] = std::polar(mag_lin, lin_phase_acc[static_cast<size_t>(i)]);
+            if (i < m_nFFT) {
+                // Polar to rectangular
+                fft_in[static_cast<size_t>(i)] = std::polar(mag_lin, lin_phase_acc[static_cast<size_t>(i)]);
+            }
         }
 
-        // Hermitian symmetry for real-valued IFFT
-        for (int i = 1; i < m_nFFT / 2; ++i)
-            fft_in[static_cast<size_t>(m_nFFT - i)] = std::conj(fft_in[static_cast<size_t>(i)]);
-
-        // Nyquist bin must be real
-        fft_in[static_cast<size_t>(m_nFFT / 2)] = std::complex<float>(fft_in[static_cast<size_t>(m_nFFT / 2)].real(), 0.0f);
-
-        // ── Step 3: IFFT (separate in/out buffers) ────────────────────────────
+        // IFFT
         m_fft->perform(fft_in.data(), fft_out.data(), true);
 
-        // ── Step 4: Overlap-Add ───────────────────────────────────────────────
+        // Overlap-Add
         int frame_start = t * m_hopLength - center_offset;
         for (int i = 0; i < m_nFFT; ++i) {
             int idx = frame_start + i;
             if (idx >= 0 && idx < total_samples) {
-                tmp_ptr[static_cast<size_t>(idx)] += fft_out[static_cast<size_t>(i)].real() * window[static_cast<size_t>(i)];
-                norm[static_cast<size_t>(idx)]    += window[static_cast<size_t>(i)] * window[static_cast<size_t>(i)];
+                tmp_ptr[static_cast<size_t>(idx)] += fft_out[static_cast<size_t>(i)].real() * m_window[static_cast<size_t>(i)];
             }
         }
     }
 
-    // ── Step 5: OLA normalization ─────────────────────────────────────────────
+    // OLA normalization
     for (int i = 0; i < total_samples; ++i)
-        if (norm[static_cast<size_t>(i)] > 1e-10f)
-            tmp_ptr[static_cast<size_t>(i)] /= norm[static_cast<size_t>(i)];
-
-    // ── Step 6: Resample if needed ────────────────────────────────────────────
-    std::cout << "Source SR: " << m_sampleRate
-              << "  Target SR: " << m_targetSampleRate << std::endl;
+        if (m_olaNormalization[static_cast<size_t>(i)] > 1e-10f)
+            tmp_ptr[static_cast<size_t>(i)] /= m_olaNormalization[static_cast<size_t>(i)];
 
     if (std::abs(m_targetSampleRate - (double)m_sampleRate) > 0.1)
     {
-        // LagrangeInterpolator::process(speedRatio, src, dst, numDstSamples)
-        // speedRatio = srcSampleRate / dstSampleRate  (= 16000/44100 ≈ 0.363)
         double speedRatio    = (double)m_sampleRate / m_targetSampleRate;
         int    targetSamples = (int)std::round((double)total_samples / speedRatio);
 
@@ -352,14 +333,14 @@ void GANSynthInference::postProcess(const float* rawOutput, juce::AudioBuffer<fl
         resampler.reset();
         resampler.process(speedRatio, tmp_ptr, out_ptr, targetSamples);
 
-        std::cout << "Resampled to " << targetSamples << " samples." << std::endl;
+        std::cout << "Resampled from " << total_samples << " to " << targetSamples
+                  << " samples (speed ratio: " << speedRatio << ")" << std::endl;
     }
     else
     {
         outputBuffer.setSize(1, total_samples, false, true, false);
         outputBuffer.clear();
         outputBuffer.copyFrom(0, 0, tempBuffer, 0, 0, total_samples);
+        std::cout << "No resampling needed." << std::endl;
     }
-
-    std::cout << "Post-processing completed." << std::endl;
 }

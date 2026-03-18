@@ -113,6 +113,7 @@ float GANSynth_for_MIDISynthesizer_Processor::nextGaussian(juce::Random& r) {
 
 void GANSynth_for_MIDISynthesizer_Processor::generateAudio()
 {
+    std::cout << "Starting audio generation..." << std::endl;
     if (m_isGenerating) return;
 
     juce::Thread::launch([this]() {
@@ -138,6 +139,8 @@ void GANSynth_for_MIDISynthesizer_Processor::generateAudio()
 
         // Notify listeners that generation is complete
         sendActionMessage("GenerationFinished");
+
+        std::cout << "Audio generation completed." << std::endl;
     });
 }
 
