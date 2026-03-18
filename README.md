@@ -5,8 +5,9 @@ Since the model takes a MIDI note number and a 256-dimensional latent noise vect
 
 The goal is to bridge machine learning-based sound generation with traditional MIDI workflows, enabling expressive and controllable synthesis driven by latent space manipulation.
 
-<!--## Demonstration
-[Youtube<img width="968" height="594" alt="Screenshot 2026-01-19 at 0 26 53" src="https://github.com/user-attachments/assets/970bc822-9339-4915-863a-82c8aad51d12" />](https://youtu.be/6z2AlWM6EjE) -->
+## Demonstration
+[Youtube<img width="668" height="394" alt="Screenshot 2026-03-18 at 22 37 58" src="https://github.com/user-attachments/assets/46580627-8ba0-4043-9eba-1a44296c30ff" />](https://youtu.be/ElA5pXOef1M) 
+
 
 ## 🛠️ Build Instructions
 ```
