@@ -64,6 +64,27 @@ private:
     float nextGaussian(juce::Random& r);
 
     void parameterChanged (const juce::String& parameterID, float newValue) override;
+    
+    // Voice structure for polyphony
+    struct Voice {
+        int noteNumber = -1;
+        int baseNote = -1; // Added: Store the closest pre-generated note
+        int playIndex = 0;
+        double pitchRatio = 1.0;
+        juce::LagrangeInterpolator interpolator;
+        bool active = false;
+
+        void reset() {
+            noteNumber = -1;
+            baseNote = -1;
+            playIndex = 0;
+            pitchRatio = 1.0;
+            interpolator.reset();
+            active = false;
+        }
+    };
+    std::array<Voice, 6> m_voices;
+
     // Offline inference and playback
     GANSynthInference m_inference;
     // Cache for generated audio samples for MIDI notes
@@ -71,13 +92,7 @@ private:
     juce::AudioSampleBuffer m_emptyBuffer;
 
     std::atomic<bool> m_isGenerating {false};
-    std::atomic<int> m_playIndex {0};
-    std::atomic<bool> m_isPlaying {false};
     int m_lastMidiNote = 60;
-
-    int m_currentBaseNote = 60;
-    double m_pitchRatio = 1.0;
-    juce::LagrangeInterpolator m_interpolator;
 
     juce::AudioProcessorValueTreeState apvts;
 

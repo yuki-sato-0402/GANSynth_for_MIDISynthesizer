@@ -12,7 +12,6 @@ The goal is to bridge machine learning-based sound generation with traditional M
 - Since the model accepts a MIDI note number as input, the system generates samples (inference) every 6 semitones in a loop and fill in the gaps using pitch shifting.
 
 ## Demonstration
-Click the thumbnail below to watch a demo on YouTube.
 [Youtube<img width="668" height="394" alt="Screenshot 2026-03-18 at 22 37 58" src="https://github.com/user-attachments/assets/46580627-8ba0-4043-9eba-1a44296c30ff" />](https://youtu.be/S5SueJgJrvs) 
 
 
