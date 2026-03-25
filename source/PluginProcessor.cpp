@@ -8,8 +8,10 @@
 //==============================================================================
 GANSynth_for_MIDISynthesizer_Processor::GANSynth_for_MIDISynthesizer_Processor() 
         : AudioProcessor (BusesProperties()
-                       .withInput  ("Input",  juce::AudioChannelSet::mono(), true)
-                       .withOutput ("Output", juce::AudioChannelSet::mono(), true)
+                #if ! JucePlugin_IsSynth
+                  .withInput  ("Input",  juce::AudioChannelSet::stereo(), true)
+                #endif
+                  .withOutput ("Output", juce::AudioChannelSet::stereo(), true)
                        ),
         apvts(*this, nullptr, juce::Identifier("PARAMETERS"),
         juce::AudioProcessorValueTreeState::ParameterLayout {
@@ -91,7 +93,9 @@ void GANSynth_for_MIDISynthesizer_Processor::prepareToPlay (double sampleRate, i
 {
     juce::dsp::ProcessSpec spec {sampleRate,
                                  static_cast<juce::uint32>(samplesPerBlock),
-                                 static_cast<juce::uint32>(getTotalNumInputChannels())};
+                                 static_cast<juce::uint32>(getTotalNumOutputChannels())};
+
+    std::cout << "getTotalNumOutputChannels() " << getTotalNumOutputChannels() << std::endl;
 
     gain.prepare(spec);
     gain.setGainLinear(gainParam);
@@ -102,6 +106,11 @@ void GANSynth_for_MIDISynthesizer_Processor::prepareToPlay (double sampleRate, i
     m_inference.setTargetSampleRate(sampleRate);
     m_inference.prepare(GANSynth_MODEL_DIR "gansynth.onnx");
     m_inference.loadMel2lFromCsv(GANSynth_MODEL_DIR "mel2l_matrix.csv");
+
+    m_delaySamples = juce::roundToInt(sampleRate * m_delayTimeSeconds);
+    m_delayLine.setSize(1, std::max(1, m_delaySamples));
+    m_delayLine.clear();
+    m_delayLineWritePos = 0;
 }
 
 float GANSynth_for_MIDISynthesizer_Processor::nextGaussian(juce::Random& r) {
@@ -150,21 +159,23 @@ void GANSynth_for_MIDISynthesizer_Processor::releaseResources()
 
 bool GANSynth_for_MIDISynthesizer_Processor::isBusesLayoutSupported (const BusesLayout& layouts) const
 {
-    if (layouts.getMainInputChannelSet() != layouts.getMainOutputChannelSet())
+    // 1. No inputs accepted (synth-only configuration)
+    if (layouts.getMainInputChannelSet() != juce::AudioChannelSet::disabled())
         return false;
 
-    if (layouts.getMainOutputChannelSet() != juce::AudioChannelSet::mono())
+    // 2. Output is limited to stereo only
+    if (layouts.getMainOutputChannelSet() != juce::AudioChannelSet::stereo())
         return false;
-    else
-        return true;
+
+    return true;
 }
 
 void GANSynth_for_MIDISynthesizer_Processor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midiMessages)
 {
+    //std::cout << "AAA" << std::endl;
     juce::ScopedNoDenormals noDenormals;
 
     midiMessageCollector.removeNextBlockOfMessages(midiMessages, buffer.getNumSamples());
-    
     for (const auto metadata : midiMessages)
     {
         const auto msg = metadata.getMessage();
@@ -176,27 +187,26 @@ void GANSynth_for_MIDISynthesizer_Processor::processBlock (juce::AudioBuffer<flo
               
             if (!m_generatedNotes.empty())
             {
-            // lower_bound returns a pointer (iterator) pointing to the first element with a value greater than or equal to the currently played note 
+            // lower_bound returns a pointer (iterator) pointing to the first element with a value greater than or equal to the currently played note      
                 auto it = m_generatedNotes.lower_bound(midiNote);
                 int closestNote = 60;
-                
-            // If the sound is higher than the overall level, use the highest-pitched cache
+            // If the sound is higher than the overall level, use the highest-pitched cache     
                 if (it == m_generatedNotes.end()) {
                     closestNote = m_generatedNotes.rbegin()->first;
-             // If the sound is lower than the overall level, use the lowest cache
+            // If the sound is lower than the overall level, use the lowest cache           
                 } else if (it == m_generatedNotes.begin()) {
                     closestNote = it->first;
                 } else {
                     auto prev = std::prev(it);
-                    //Choose the "closest sound" based on distance
+                    //Choose the "closest sound" based on distance  
                     if (midiNote - prev->first < it->first - midiNote)
                         closestNote = prev->first;
                     else
                         closestNote = it->first;
                 }
 
-                // Find a free voice
                 Voice* voiceToUse = nullptr;
+                // Find a free voice       
                 for (auto& v : m_voices)
                 {
                     if (!v.active)
@@ -205,8 +215,7 @@ void GANSynth_for_MIDISynthesizer_Processor::processBlock (juce::AudioBuffer<flo
                         break;
                     }
                 }
-                
-                // If no free voice, steal the one that is furthest along in playback
+                // If no free voice, steal the one that is furthest along in playback  
                 if (voiceToUse == nullptr)
                 {
                     voiceToUse = &m_voices[0];
@@ -218,7 +227,7 @@ void GANSynth_for_MIDISynthesizer_Processor::processBlock (juce::AudioBuffer<flo
                 voiceToUse->reset();
                 voiceToUse->noteNumber = midiNote;
                 voiceToUse->baseNote = closestNote;
-                //Calculate the pitch of the complementary keys.
+                //Calculate the pitch of the complementary keys.          
                 voiceToUse->pitchRatio = std::pow(2.0, (double)(midiNote - closestNote) / 12.0);
                 voiceToUse->active = true;
             }
@@ -230,7 +239,7 @@ void GANSynth_for_MIDISynthesizer_Processor::processBlock (juce::AudioBuffer<flo
             {
                 if (v.active && v.noteNumber == midiNote)
                 {
-                    v.active = false; // Simple gate off (no release envelope in this version)
+                    v.active = false; // Simple gate off (no release envelope in this version)                                
                 }
             }
         }
@@ -241,7 +250,10 @@ void GANSynth_for_MIDISynthesizer_Processor::processBlock (juce::AudioBuffer<flo
     int numSamples = buffer.getNumSamples();
     const int fadeOutSamples = static_cast<int>(getSampleRate() * 0.05);
 
-    // Manage which notes each voice is playing and up to which position
+    // Temp mono buffer to collect all voices
+    juce::AudioBuffer<float> monoMixBuffer(1, numSamples);
+    monoMixBuffer.clear();
+
     for (auto& v : m_voices)
     {
         if (v.active && !m_generatedNotes.empty() && v.baseNote != -1)
@@ -252,15 +264,14 @@ void GANSynth_for_MIDISynthesizer_Processor::processBlock (juce::AudioBuffer<flo
             if (v.playIndex < generatedSamples)
             {
                 auto* src = srcBuffer.getReadPointer(0);
-                
-                // Use a temporary buffer for each voice to perform interpolation and then mix
+                // Use a temporary buffer for each voice to perform interpolation and then mix               
                 juce::AudioBuffer<float> tempVoiceBuffer(1, numSamples);
                 tempVoiceBuffer.clear();
                 auto* dest = tempVoiceBuffer.getWritePointer(0);
                 
                 int used = v.interpolator.process(v.pitchRatio, src + v.playIndex, dest, numSamples, generatedSamples - v.playIndex, 0);
                 
-                // Apply fade out at source buffer end
+                // Apply fade out at source buffer end              
                 int fadeStartPos = generatedSamples - fadeOutSamples;
                 if (v.playIndex + used >= fadeStartPos)
                 {
@@ -275,8 +286,8 @@ void GANSynth_for_MIDISynthesizer_Processor::processBlock (juce::AudioBuffer<flo
                     }
                 }
 
-                // Mix into main buffer
-                buffer.addFrom(0, 0, tempVoiceBuffer, 0, 0, numSamples);
+                // Mix into main buffer 
+                monoMixBuffer.addFrom(0, 0, tempVoiceBuffer, 0, 0, numSamples);
                 v.playIndex += used;
                 
                 if (used == 0 && v.playIndex >= generatedSamples - 5)
@@ -287,6 +298,35 @@ void GANSynth_for_MIDISynthesizer_Processor::processBlock (juce::AudioBuffer<flo
                 v.active = false;
             }
         }
+    }
+
+    // Apply Pseudo-Stereo Comb Filtering
+    auto* monoRead = monoMixBuffer.getReadPointer(0);
+    auto* leftWrite = buffer.getWritePointer(0);
+    auto* rightWrite = buffer.getWritePointer(1);
+
+    /*
+    Pseudo-stereo (duophonic) conversion has been implemented.
+    Implemented method:
+    An complementary comb filter (Lauridsen's method) was adopted.
+    For a mono signal x(t), a delayed signal $x(t- deltime) of 20ms is prepared, 
+    and the following calculations are performed:   
+    L : x(t) + x(t − deltime)（In-phase delay）
+    R : x(t) - x(t − deltime)（Reverse-phase delay）
+    */
+    for (int i = 0; i < numSamples; ++i)
+    {
+        float x = monoRead[i];
+        // Read from delay buffer
+        float x_delayed = m_delayLine.getSample(0, m_delayLineWritePos);
+        
+        // Write to delay buffer
+        m_delayLine.setSample(0, m_delayLineWritePos, x);
+        if (++m_delayLineWritePos >= m_delaySamples)
+            m_delayLineWritePos = 0;
+
+        leftWrite[i] =  (x - x_delayed);
+        rightWrite[i] = (x + x_delayed);
     }
 
     juce::dsp::AudioBlock<float> audioBlock(buffer);

@@ -5,7 +5,7 @@
 #include "GANSynthInference.h"
 //==============================================================================
 class GANSynth_for_MIDISynthesizer_Processor  : public juce::AudioProcessor, public juce::AudioProcessorValueTreeState::Listener, 
-public juce::ValueTree::Listener, public juce::ActionBroadcaster
+public juce::ActionBroadcaster//, public juce::ValueTree::Listener
 {
 public:
     //==============================================================================
@@ -64,6 +64,11 @@ private:
     float nextGaussian(juce::Random& r);
 
     void parameterChanged (const juce::String& parameterID, float newValue) override;
+    
+    const float m_delayTimeSeconds = 0.02f; // 20ms
+    int m_delaySamples = 0;
+    juce::AudioSampleBuffer m_delayLine;
+    int m_delayLineWritePos = 0;
     
     // Voice structure for polyphony
     struct Voice {

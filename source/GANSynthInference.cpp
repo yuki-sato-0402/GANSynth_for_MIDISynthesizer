@@ -333,8 +333,7 @@ void GANSynthInference::postProcess(const float* rawOutput, juce::AudioBuffer<fl
         resampler.reset();
         resampler.process(speedRatio, tmp_ptr, out_ptr, targetSamples);
 
-        std::cout << "Resampled from " << total_samples << " to " << targetSamples
-                  << " samples (speed ratio: " << speedRatio << ")" << std::endl;
+        std::cout << "Resampled from " << total_samples << " to " << targetSamples << std::endl;
     }
     else
     {

@@ -10,9 +10,11 @@ The goal is to bridge machine learning-based sound generation with traditional M
 - Playable as a MIDI synthesizer in any DAW that supports VST3 or AU
 - The TensorFlow model is converted to ONNX for inference. 
 - Since the model accepts a MIDI note number as input, the system generates samples (inference) every 6 semitones in a loop and fill in the gaps using pitch shifting.
+- Supports 6-voice polyphony.
+- The model outputs data in mono, but it performs pseudo-stereo conversion using an complementary comb filter.
 
 ## Demonstration
-[Youtube<img width="668" height="394" alt="Screenshot 2026-03-18 at 22 37 58" src="https://github.com/user-attachments/assets/46580627-8ba0-4043-9eba-1a44296c30ff" />](https://youtu.be/S5SueJgJrvs) 
+[Youtube<img width="668" height="394" alt="Screenshot 2026-03-18 at 22 37 58" src="https://github.com/user-attachments/assets/46580627-8ba0-4043-9eba-1a44296c30ff" />](https://youtu.be/9UzeLMI8VBs) 
 
 
 ## 🛠️ Build Instructions
