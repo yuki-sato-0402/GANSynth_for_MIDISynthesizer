@@ -59,3 +59,6 @@ Special thanks to the authors for streamlining the complex process of integratin
 - [Tutorial: Build a MIDI synthesiser](https://juce.com/tutorials/tutorial_synth_using_midi_input/)
 
 - [Let's build a synthesizer plug-in with C++ and the JUCE Framework!](https://youtube.com/playlist?list=PLLgJJsrdwhPwJimt5vtHtNmu63OucmPck&si=vfKCEvMZtt56co4B)
+
+# Lisence
+This project is licensed under the MIT License, see the LICENSE.txt file for details
