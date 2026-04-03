@@ -78,6 +78,10 @@ private:
         double pitchRatio = 1.0;
         juce::LagrangeInterpolator interpolator;
         bool active = false;
+        bool releasing = false;
+        float releaseLevel = 1.0f;
+        int releaseSamplesTotal = 0;
+        int releaseSamplesRemaining = 0;
 
         void reset() {
             noteNumber = -1;
@@ -86,6 +90,10 @@ private:
             pitchRatio = 1.0;
             interpolator.reset();
             active = false;
+            releasing = false;
+            releaseLevel = 1.0f;
+            releaseSamplesTotal = 0;
+            releaseSamplesRemaining = 0;
         }
     };
     std::array<Voice, 6> m_voices;

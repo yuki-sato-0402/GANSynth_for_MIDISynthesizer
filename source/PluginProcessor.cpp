@@ -257,9 +257,11 @@ void GANSynth_for_MIDISynthesizer_Processor::processBlock (juce::AudioBuffer<flo
             int midiNote = msg.getNoteNumber();
             for (auto& v : m_voices)
             {
-                if (v.active && v.noteNumber == midiNote)
+                if (v.active && v.noteNumber == midiNote && !v.releasing)
                 {
-                    v.active = false; // Simple gate off (no release envelope in this version)                                
+                    v.releasing = true;
+                    v.releaseSamplesTotal = static_cast<int>(getSampleRate() * 0.1); // 100ms release
+                    v.releaseSamplesRemaining = v.releaseSamplesTotal;
                 }
             }
         }
@@ -268,7 +270,6 @@ void GANSynth_for_MIDISynthesizer_Processor::processBlock (juce::AudioBuffer<flo
     buffer.clear();
     
     int numSamples = buffer.getNumSamples();
-    const int fadeOutSamples = static_cast<int>(getSampleRate() * 0.05);
 
     // Temp mono buffer to collect all voices
     juce::AudioBuffer<float> monoMixBuffer(1, numSamples);
@@ -291,17 +292,25 @@ void GANSynth_for_MIDISynthesizer_Processor::processBlock (juce::AudioBuffer<flo
                 
                 int used = v.interpolator.process(v.pitchRatio, src + v.playIndex, dest, numSamples, generatedSamples - v.playIndex, 0);
                 
-                // Apply fade out at source buffer end              
-                int fadeStartPos = generatedSamples - fadeOutSamples;
-                if (v.playIndex + used >= fadeStartPos)
+                // Apply fade out if releasing
+                if (v.releasing)
                 {
                     for (int i = 0; i < numSamples; ++i)
                     {
-                        double currentInputPos = v.playIndex + (i * v.pitchRatio);
-                        if (currentInputPos >= fadeStartPos)
+                        float releaseGain = (float)v.releaseSamplesRemaining / v.releaseSamplesTotal;
+                        dest[i] *= releaseGain;
+                        
+                        if (v.releaseSamplesRemaining > 0)
+                            v.releaseSamplesRemaining--;
+                        
+                        if (v.releaseSamplesRemaining <= 0)
                         {
-                            float fade_gain = 1.0f - (float)(currentInputPos - fadeStartPos) / fadeOutSamples;
-                            dest[i] *= std::max(0.0f, fade_gain);
+                            // If we finished the release in this block, clear remaining samples in this voice's buffer
+                            for (int j = i + 1; j < numSamples; ++j)
+                                dest[j] = 0;
+                            
+                            v.active = false;
+                            break;
                         }
                     }
                 }
