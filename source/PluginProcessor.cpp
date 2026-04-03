@@ -104,8 +104,28 @@ void GANSynth_for_MIDISynthesizer_Processor::prepareToPlay (double sampleRate, i
     midiMessageCollector.reset(sampleRate);
     
     m_inference.setTargetSampleRate(sampleRate);
-    m_inference.prepare(GANSynth_MODEL_DIR "gansynth.onnx");
-    m_inference.loadMel2lFromCsv(GANSynth_MODEL_DIR "mel2l_matrix.csv");
+    
+    // Helper to extract binary data to a temporary file
+    auto getExtractedFile = [](const char* data, int size, const juce::String& name) -> juce::File {
+        auto tempFile = juce::File::getSpecialLocation(juce::File::tempDirectory)
+                            .getChildFile("GANSynth_for_MIDISynthesizer_temp")
+                            .getChildFile(name);
+        
+        if (!tempFile.getParentDirectory().exists())
+            tempFile.getParentDirectory().createDirectory();
+
+        if (!tempFile.exists() || tempFile.getSize() != (juce::int64)size)
+            tempFile.replaceWithData(data, (size_t)size);
+            
+        return tempFile;
+    };
+
+    auto modelFile = getExtractedFile(BinaryData::gansynth_onnx, BinaryData::gansynth_onnxSize, "gansynth.onnx");
+    auto csvFile = getExtractedFile(BinaryData::mel2l_matrix_csv, BinaryData::mel2l_matrix_csvSize, "mel2l_matrix.csv");
+
+    std::cout << "Loading extracted model from: " << modelFile.getFullPathName() << std::endl;
+    m_inference.prepare(modelFile.getFullPathName());
+    m_inference.loadMel2lFromCsv(csvFile.getFullPathName());
 
     m_delaySamples = juce::roundToInt(sampleRate * m_delayTimeSeconds);
     m_delayLine.setSize(1, std::max(1, m_delaySamples));

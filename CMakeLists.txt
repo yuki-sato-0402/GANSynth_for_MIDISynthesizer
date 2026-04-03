@@ -99,6 +99,16 @@ target_compile_definitions(${TARGET_NAME}
     GANSynth_MODEL_DIR="${GANSynth_MODEL_DIR}"
 )
 
+set(GANSynth_MODEL_SRC 
+    "${CMAKE_CURRENT_LIST_DIR}/model/gansynth.onnx"
+    "${CMAKE_CURRENT_LIST_DIR}/model/mel2l_matrix.csv"
+)
+juce_add_binary_data(GANSynthModelBinaryData SOURCES ${GANSynth_MODEL_SRC})
+target_link_libraries(${TARGET_NAME} PRIVATE GANSynthModelBinaryData)
+target_compile_definitions(${TARGET_NAME} PRIVATE USE_EMBEDDED_MODEL)
+
+
+
 # Add all source files to file list
 file(GLOB_RECURSE SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/source/*.cpp ${CMAKE_CURRENT_SOURCE_DIR}/source/*.h)
 
