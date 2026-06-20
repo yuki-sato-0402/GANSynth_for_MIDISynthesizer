@@ -36,7 +36,22 @@ Although ONNX formally defines support for complex numbers, in practice this is 
 As a result, parts of the model that rely on complex-valued operations—such as inverse FFT (iFFT)—cannot be directly converted and must be implemented separately on the host side.
 In other words, the model's output itself only includes data in the spectral domain.
 
-Additionally, the mel-to-linear transformation required for inverse FFT relies on a precomputed conversion matrix (computeMelToLinear). This matrix is ​​generated in Python and exported as a CSV file, which is then loaded and used within the JUCE implementation.
+Additionally, the mel-to-linear transformation required for inverse FFT relies on a precomputed conversion matrix (`mel2l_matrix.csv`). This matrix is generated in Python and exported as a CSV file, which is then loaded and used within the JUCE implementation.
+
+### Mel-to-Linear Transformation Matrix (`mel2l_matrix.csv`)
+
+#### What is this CSV for?
+The GANSynth model outputs audio features in the **Mel-scale** (a frequency representation tailored to human hearing, e.g., 1024 bins). However, to synthesize actual sound waves, we must convert these features back to the **Linear-scale** (evenly spaced frequency bins, e.g., 1025 bins) required for the Inverse Fast Fourier Transform (iFFT).
+
+Since converting from linear to mel is a lossy compression process (like converting a high-resolution image to a lower resolution), we cannot easily reverse it. The original model uses a mathematical approach to estimate how energy in the Mel bins should be distributed back to the Linear bins.
+
+#### Why do we pre-compute and export it to CSV?
+Calculating this distribution mapping (how much weight of each Mel bin goes to which Linear bin) at runtime is computationally heavy and requires complex digital signal processing (DSP) math. 
+
+To keep the C++ synthesizer fast and lightweight:
+1. **Pre-computation:** We calculate this fixed "distribution mapping table" once in Python and save it as a $1024 \times 1025$ matrix in `model/mel2l_matrix.csv`.
+2. **Fast Inference in C++:** During C++ plugin execution, we load this CSV file into memory. Instead of performing heavy DSP calculations, the synthesizer simply multiplies the model's output by this pre-calculated mapping table to instantly reconstruct the linear frequency spectrum.
+
 
 Several Python scripts are provided below.
 - [gansynthFreezeGraph](pythonScripts/gansynthFreezeGraph.py) : A script to convert TF pretrained checkpoints to a Freeze Graph.
